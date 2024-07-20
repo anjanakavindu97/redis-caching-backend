@@ -1,4 +1,5 @@
 const mongoose = require('mongoose')
+const redisClient = require('../utils/redisClient')
 
 // user model
 const userSchema = new mongoose.Schema({
@@ -16,6 +17,8 @@ module.exports = {
         try {
             const { name, email } = req.body;
             const user = await User.create({ name, email });
+            // invalid cache after creating a new user
+            await redisClient.del('allUsers')
             res.json(user);
         } catch (error) {
             res.send(error);
@@ -24,10 +27,23 @@ module.exports = {
 
     list: async (req, res)=>{
         try {
-            const users = await  User.find({})
-            res.json(users)
+            // check cache
+            const cacheKey = 'allUsers';
+            const cachedUsers = await redisClient.get(cacheKey);
+            if(cachedUsers) {
+                console.log('Cached hit - Users fetch from Redis');
+                return res.json({users: JSON.parse(cachedUsers)});
+            }
+
+            //cached miss, query mongoDB
+            const users = await  User.find();
+            if(users.length) {
+                await redisClient.set(cacheKey, JSON.stringify(users), 'EX', 3600); // cache for one hour
+                console.log('Cached miss - Users fetch from MongoDB')
+                res.JSON(users);
+            }
         } catch (error) {
-            res.send(error)
+            res.send(error);
         }
     },
 }
